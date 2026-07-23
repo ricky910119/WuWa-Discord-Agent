@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Discord 遊戲情報機器人(官方第一手來源版)
+Discord 遊戲情報機器人(官方第一手來源 · 每小時檢查 · 只發新的)
 - 來源只用官方管道:官網/官方 API、Steam 官方公告、官方 YouTube 頻道(不使用新聞媒體)
-- 每則消息「分開發送」,內容直接附上原始網址,讓 Discord 自動產生縮圖預覽。
-遊戲設定放在同目錄的 config.json;Webhook 從環境變數 WEBHOOK 讀取 (GitHub Secret)。
+- 每次執行:抓官方最近更新,和「已發送記錄 state/sent.json」比對,只發沒發過的新項目。
+- 每則消息分開發送,內容直接附原始網址,讓 Discord 自動產生縮圖預覽。
+遊戲設定放在同目錄 config.json;Webhook 從環境變數 WEBHOOK 讀取 (GitHub Secret)。
 """
 import os, sys, json, html, time, datetime as dt
 import requests, feedparser
 
-DAYS_BACK = int(os.getenv("DAYS_BACK", "7"))
-MAX_ITEMS = int(os.getenv("MAX_ITEMS", "10"))
-POST_DELAY = float(os.getenv("POST_DELAY", "1.2"))   # 每則間隔(避免被限流)
+DAYS_BACK = int(os.getenv("DAYS_BACK", "2"))       # 每次往回看幾天(有記憶,窗口小即可)
+MAX_ITEMS = int(os.getenv("MAX_ITEMS", "12"))      # 單次最多發幾則(防爆量)
+POST_DELAY = float(os.getenv("POST_DELAY", "1.2"))
+KEEP_DAYS = int(os.getenv("KEEP_DAYS", "60"))      # 記錄保留天數
 HTTP_TIMEOUT = 25
 UA = "Mozilla/5.0 (compatible; DiscordGameNewsBot/1.0)"
-TW = dt.timezone(dt.timedelta(hours=8))   # 台北 / 官方常用 UTC+8
+TW = dt.timezone(dt.timedelta(hours=8))
 MINDATE = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+HERE = os.path.dirname(os.path.abspath(__file__))
+STATE_PATH = os.path.join(HERE, "state", "sent.json")
 
 
 def _now_utc():
@@ -32,7 +36,6 @@ def _to_utc(st):
 
 
 def fetch_rss(url, label="", prefix=""):
-    """通用 RSS/Atom(含 YouTube)抓取。"""
     items = []
     try:
         r = requests.get(url, headers={"User-Agent": UA}, timeout=HTTP_TIMEOUT)
@@ -50,7 +53,6 @@ def fetch_rss(url, label="", prefix=""):
 
 
 def fetch_steam(appid, label="Steam"):
-    """Steam 官方新聞 API。"""
     items = []
     url = ("https://api.steampowered.com/ISteamNews/GetNewsForApp/v2/"
            f"?appid={appid}&count=20&maxlength=0&format=json")
@@ -70,7 +72,6 @@ def fetch_steam(appid, label="Steam"):
 
 
 def fetch_kuro(url, base_link, label="官網"):
-    """Kuro Games 官方網站新聞 API (鳴潮)。createTime 視為 UTC+8。"""
     items = []
     try:
         r = requests.get(url, headers={"User-Agent": UA},
@@ -106,27 +107,41 @@ def collect(game):
         elif t == "kuro":
             raw += fetch_kuro(f["url"], f["base"], f.get("label", "官網"))
 
-    # 去重(以連結為主)
     seen, dedup = set(), []
     for it in raw:
-        k = (it["link"] or "").strip() or "".join(it["title"].lower().split())[:40]
+        k = (it["link"] or "").strip()
         if k and k not in seen:
             seen.add(k); dedup.append(it)
 
-    key = lambda it: it["published"] or MINDATE
     cutoff = _now_utc() - dt.timedelta(days=DAYS_BACK)
     recent = [it for it in dedup if it["published"] and it["published"] >= cutoff]
-    recent.sort(key=key, reverse=True)
+    recent.sort(key=lambda it: it["published"] or MINDATE)   # 由舊到新
+    return recent
 
-    fb = False
-    if not recent:
-        dedup.sort(key=key, reverse=True)
-        recent = dedup[:3]; fb = True
-    return recent[:MAX_ITEMS], fb
+
+def load_state():
+    try:
+        with open(STATE_PATH, encoding="utf-8") as fp:
+            return json.load(fp)          # { link: "ISO 送出時間" }
+    except Exception:
+        return {}
+
+
+def save_state(state):
+    cutoff = _now_utc() - dt.timedelta(days=KEEP_DAYS)
+    pruned = {}
+    for link, iso in state.items():
+        try:
+            if dt.datetime.fromisoformat(iso) >= cutoff:
+                pruned[link] = iso
+        except Exception:
+            pruned[link] = iso
+    os.makedirs(os.path.dirname(STATE_PATH), exist_ok=True)
+    with open(STATE_PATH, "w", encoding="utf-8") as fp:
+        json.dump(pruned, fp, ensure_ascii=False, indent=0)
 
 
 def item_content(it):
-    """一則訊息:標題 + 日期/來源,下一行放原始網址(讓 Discord 產生縮圖)。"""
     meta = []
     if it["published"]:
         meta.append(it["published"].astimezone(TW).strftime("%Y/%m/%d"))
@@ -150,30 +165,30 @@ def post_message(webhook, content):
 
 
 def main():
-    with open(os.path.join(os.path.dirname(__file__), "config.json"), encoding="utf-8") as fp:
+    with open(os.path.join(HERE, "config.json"), encoding="utf-8") as fp:
         game = json.load(fp)
     webhook = os.getenv("WEBHOOK", "").strip()
     if not webhook:
         print("[error] 找不到環境變數 WEBHOOK", file=sys.stderr); sys.exit(1)
 
-    items, fb = collect(game)
-    print(f"{game['name']}:取得 {len(items)} 則{'(退回近期)' if fb else ''}")
+    state = load_state()
+    recent = collect(game)
+    new_items = [it for it in recent if it["link"] not in state][:MAX_ITEMS]
+    print(f"{game['name']}:近 {DAYS_BACK} 天 {len(recent)} 則,其中新項目 {len(new_items)} 則")
 
-    today = _now_utc().astimezone(TW).strftime("%Y/%m/%d")
-    header = f"{game['emoji']} **{game['name']}｜官方情報 {today}**" + ("(近期)" if fb else "")
-    post_message(webhook, header)
+    if not new_items:
+        print("沒有新項目,這次不發送。")
+        return
 
-    if not items:
-        post_message(webhook, "本週暫無官方新消息。")
-        print("無項目,已發送提示。"); return
-
-    # 由舊到新逐則發送,讓最新的消息落在頻道最下方(最新位置)
     sent = 0
-    for it in sorted(items, key=lambda x: x["published"] or MINDATE):
+    now_iso = _now_utc().isoformat()
+    for it in new_items:
         time.sleep(POST_DELAY)
         if post_message(webhook, item_content(it)):
+            state[it["link"]] = now_iso
             sent += 1
-    print(f"發送完成:{sent}/{len(items)} 則 ✅")
+    save_state(state)
+    print(f"發送完成:{sent}/{len(new_items)} 則 ✅")
     if sent == 0:
         sys.exit(1)
 

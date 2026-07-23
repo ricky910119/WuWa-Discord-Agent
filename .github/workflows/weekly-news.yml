@@ -1,11 +1,19 @@
-name: 每週遊戲情報
+name: 官方情報自動轉發
 
 on:
   push:
-    branches: [ main ]        # 一有新 commit 就跑(方便即時測試)
+    branches: [ main ]
+    paths-ignore: [ "state/**" ]   # 記憶檔的提交不再觸發,避免無限迴圈
   schedule:
-    - cron: "0 1 * * 1"       # 每週一 台北 09:00 (UTC 01:00)
+    - cron: "0 * * * *"            # 每小時檢查一次
   workflow_dispatch:
+
+permissions:
+  contents: write                  # 讓它能把「已發送記錄」寫回 repo
+
+concurrency:
+  group: news-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   send-news:
@@ -16,8 +24,20 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - env:
+      - name: 執行(只發新項目)
+        env:
           WEBHOOK: ${{ secrets.WEBHOOK }}
-          DAYS_BACK: "7"
-          MAX_ITEMS: "8"
+          DAYS_BACK: "2"
+          MAX_ITEMS: "12"
         run: python news_bot.py
+      - name: 保存已發送記錄
+        run: |
+          if [ -n "$(git status --porcelain state)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add state/sent.json
+            git commit -m "chore: update sent state [skip ci]"
+            git push
+          else
+            echo "no state change"
+          fi
