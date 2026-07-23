@@ -1,0 +1,9 @@
+{
+  "name": "鳴潮 Wuthering Waves",
+  "emoji": "🌊",
+  "color": "8E7CFF",
+  "feeds": [
+    {"type": "kuro", "url": "https://hw-media-cdn-mingchao.kurogame.com/akiwebsite/website2.0/json/G152/zh-tw/MainMenu.json", "base": "https://wutheringwaves.kurogames.com/zh-tw/main/news/detail/{id}", "label": "官網"},
+    {"type": "youtube", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UC6HLWYwVZOp-O3ow0pBxAAg", "label": "YouTube"}
+  ]
+}
