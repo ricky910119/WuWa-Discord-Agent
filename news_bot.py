@@ -35,6 +35,51 @@ def _to_utc(st):
         return None
 
 
+import re
+
+BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/122.0 Safari/537.36")
+
+
+def fetch_bahamut(url, label="巴哈", keyword="【情報】", prefix="📰 "):
+    """抓巴哈哈啦區看板列表,篩出標題含 keyword 的主題。
+    做法:從列表 HTML 撈出所有指向單篇貼文(C.php?...snA=NNN)的連結與其標題文字,
+    不依賴特定 class 名稱,較耐版面改動。首次見到的主題視為新的(published=now),
+    靠 sent.json 記憶去重,之後不重發。
+    注意:巴哈有 bot 偵測,GitHub Actions 的資料中心 IP 可能被擋。"""
+    items = []
+    try:
+        r = requests.get(url, headers={
+            "User-Agent": BROWSER_UA,
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "zh-TW,zh;q=0.9",
+            "Referer": "https://forum.gamer.com.tw/",
+        }, timeout=HTTP_TIMEOUT)
+        r.raise_for_status()
+        page = r.text
+        seen_sn = set()
+        # 撈所有 C.php?...snA=數字 的連結,連同錨點文字(標題)
+        for m in re.finditer(
+                r'href="(C\.php\?[^"]*?snA=(\d+)[^"]*)"[^>]*>(.*?)</a>',
+                page, re.DOTALL):
+            href, sn, inner = m.group(1), m.group(2), m.group(3)
+            if sn in seen_sn:
+                continue
+            # 去掉錨點文字裡可能的巢狀標籤,取純文字標題
+            title = html.unescape(re.sub(r"<[^>]+>", "", inner)).strip()
+            if not title:
+                continue
+            if keyword and keyword not in title:
+                continue
+            seen_sn.add(sn)
+            link = "https://forum.gamer.com.tw/" + href.replace("&amp;", "&")
+            items.append({"title": prefix + title, "link": link,
+                          "published": _now_utc(), "source": label})
+    except Exception as ex:
+        print(f"  [warn] 巴哈 失敗 {url[:60]}: {ex}", file=sys.stderr)
+    return items
+
+
 def fetch_rss(url, label="", prefix=""):
     items = []
     try:
@@ -106,6 +151,8 @@ def collect(game):
             raw += fetch_steam(f["appid"], f.get("label", "Steam"))
         elif t == "kuro":
             raw += fetch_kuro(f["url"], f["base"], f.get("label", "官網"))
+        elif t == "bahamut":
+            raw += fetch_bahamut(f["url"], f.get("label", "巴哈"), f.get("keyword", "【情報】"))
 
     seen, dedup = set(), []
     for it in raw:
