@@ -4,6 +4,7 @@
   "color": "8E7CFF",
   "feeds": [
     {"type": "kuro", "url": "https://hw-media-cdn-mingchao.kurogame.com/akiwebsite/website2.0/json/G152/zh-tw/MainMenu.json", "base": "https://wutheringwaves.kurogames.com/zh-tw/main/news/detail/{id}", "label": "官網"},
-    {"type": "youtube", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCVZqteUtWfSnwQ0ShjHixVw", "label": "YouTube"}
+    {"type": "youtube", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCVZqteUtWfSnwQ0ShjHixVw", "label": "YouTube"},
+    {"type": "youtube", "url": "https://www.youtube.com/feeds/videos.xml?channel_id=UCGc93NguHRwzv1Rw9MyIcxQ", "label": "YouTube日文"}
   ]
 }
